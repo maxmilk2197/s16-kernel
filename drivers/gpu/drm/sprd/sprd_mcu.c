@@ -247,7 +247,7 @@ static const struct i2c_device_id sprd_sensor_main_ids[] = {
 	{}
 };
 
-static struct i2c_driver sprd_main_sensor_driver = {
+static struct i2c_driver sprd_main_sensor_driver __maybe_unused = {
 	.driver = {
 		.of_match_table =
 		of_match_ptr(sprd_sensor_main_of_match_table),
@@ -260,18 +260,36 @@ static struct i2c_driver sprd_main_sensor_driver = {
 
 static int sprd_mcu_module_init(void)
 {
-	int ret = 0;
-
+	/*
+	 * nekoboot: DO NOT register an i2c driver here.
+	 *
+	 * sprd_main_sensor_driver claims "sprd,sensor-main" -- the same
+	 * compatible as the real camera sensor driver
+	 * (drivers/misc/sprd_camera/sensor/sprd_sensor_drv.c, i2c driver
+	 * "sensor_main").  Only one driver can bind an i2c client, and
+	 * drivers/Makefile links gpu/ before misc/, so this one always wins.
+	 * The camera HAL then cannot open the sensor:
+	 *
+	 *   cmr_sensor: cmr_sns_open: hal_err camera 0 open failed!
+	 *   Camera3-Device: Could not open camera session:
+	 *                  Function not implemented (-38)
+	 *
+	 * The factory kernel contains no sprd_mcu at all, which is exactly why
+	 * its camera works.
+	 *
+	 * sprd_mcu_poweron_cammot()/sprd_mcu_poweroff_cammot() have no callers
+	 * anywhere in the tree, so the i2c registration buys nothing.  The file
+	 * and its exported symbols are kept so nothing else breaks.
+	 */
 	memset(s_sensor_dev_data, 0, sizeof(s_sensor_dev_data));
-	ret = i2c_add_driver(&sprd_main_sensor_driver);
-	pr_info("register main sensor:%d\n", ret);
+	pr_info("nekoboot: sprd_mcu i2c driver NOT registered (it would steal sprd,sensor-main from sensor_main)\n");
 
-	return true;
+	return 0;
 }
 
 static void sprd_mcu_module_exit(void)
 {
-	i2c_del_driver(&sprd_main_sensor_driver);
+	/* nekoboot: nothing was registered in _init, so nothing to remove. */
 }
 
 module_init(sprd_mcu_module_init);

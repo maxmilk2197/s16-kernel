@@ -4,7 +4,13 @@
 #include <linux/ioctl.h>
 
 #define OCH1970_I2C_NAME                    "OCH1970"
-#define OCH1970_INPUT_NAME                  "magnetic"
+/* nekoboot: the ROM HAL (sensors.ums312.so) does
+ * HallSensor::openInput("och1970") -- it looks the device up BY NAME.
+ * The factory kernel exposes input5 "och1970"; our tree called it
+ * "magnetic", so the HAL could not open it and the camera app
+ * (which needs the hall sensor for the flip angle) crashed with
+ * "Invalid rotation degrees: 359". */
+#define OCH1970_INPUT_NAME                  "och1970"
 
 #define bit7        (0x01<<7)
 #define bit6        (0x01<<6)

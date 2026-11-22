@@ -1,0 +1,21 @@
+#
+# MiraMEMS MIR3DA / DA217 3-axis accelerometer (xr-gsensor ABI)
+#
+
+config SENSORS_MIR3DA
+	tristate "MiraMEMS MIR3DA / DA217 3-axis accelerometer (xr-gsensor)"
+	depends on I2C
+	default n
+	help
+	  Say Y here if you have a MiraMEMS MIR3DA / DA217 3-axis
+	  accelerometer connected through I2C (on this board: i2c bus 2,
+	  address 0x26, compatible "da,da217").
+
+	  The driver registers an input device named "accelerometer" plus a
+	  second one named "step_counter", and creates a class named
+	  "xr-gsensor" whose "device" child exposes the "gsensor" and
+	  "delay_acc" attributes required by the ROM sensor HAL
+	  (/vendor/lib64/hw/sensors.ums312.so).
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mir3da.

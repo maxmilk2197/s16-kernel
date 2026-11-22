@@ -338,7 +338,9 @@ static int sc27xx_fgu_save_last_cap(struct sc27xx_fgu_data *data, int cap)
 				  SC27XX_FGU_CAP_AREA_MASK, 0);
 }
 
-static int sc27xx_fgu_read_last_cap(struct sc27xx_fgu_data *data, int *cap)
+/* nekoboot: kept for future use; the v31 fix no longer calls it on the
+ * boot path, so it is intentionally unreferenced. */
+static int __maybe_unused sc27xx_fgu_read_last_cap(struct sc27xx_fgu_data *data, int *cap)
 {
 	int ret, value;
 
@@ -367,13 +369,24 @@ static int sc27xx_fgu_get_boot_capacity(struct sc27xx_fgu_data *data, int *cap)
 	 * battery capacity as the initial battery capacity. Otherwise we should
 	 * re-calculate the initial battery capacity.
 	 */
-	if (!is_first_poweron) {
-		ret = sc27xx_fgu_read_last_cap(data, cap);
-		if (ret)
-			return ret;
-
-		return sc27xx_fgu_save_boot_mode(data, SC27XX_FGU_NORMAIL_POWERTON);
-	}
+	/*
+	 * nekoboot: ALWAYS recompute the boot capacity from the OCV, exactly as
+	 * the factory kernel does -- never trust the value stored in the PMIC
+	 * always-on USER_AREA register.
+	 *
+	 * That register is written by whichever kernel ran last, so one bad save
+	 * sticks forever.  Our ADC calibration was wrong for a while, the OCV
+	 * lookup was pinned at 100 %, 100 got stored, and every later boot read
+	 * 100 back.  Flashing the factory kernel "fixed" it only because the
+	 * factory recomputes from OCV on every boot.
+	 *
+	 * The cell is soldered in and the OCV is sampled at boot with a light
+	 * load, so recomputing every boot is both accurate and self-correcting.
+	 * Coulomb counting still tracks capacity while the system runs.
+	 */
+	dev_info(data->dev,
+		 "nekoboot: recomputing boot capacity from OCV (stored first_poweron=%d)\n",
+		 is_first_poweron);
 
 	/*
 	 * After system booting on, the SC27XX_FGU_CLBCNT_QMAXL register saved
@@ -1116,6 +1129,15 @@ static int sc27xx_fgu_calibration(struct sc27xx_fgu_data *data)
 
 	cell = nvmem_cell_get(data->dev, "fgu_calib");
 	if (IS_ERR(cell)) {
+		/*
+		 * nekoboot: the nvmem provider (sc27xx-efuse) is a sibling on the
+		 * same PMIC and may probe after us.  -EPROBE_DEFER must be passed
+		 * up, otherwise we silently keep the default calibration and the
+		 * reported battery voltage is wrong by a factor of ~2.7.
+		 */
+		if (PTR_ERR(cell) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
 		dev_warn(data->dev, "no fgu calibration data in nvmem, using default calibration\n");
 		/* Default: ADC value for 1000mV is approximately 250 */
 		data->vol_1000mv_adc = 250;
@@ -1397,18 +1419,30 @@ static int sc27xx_fgu_probe(struct platform_device *pdev)
 
 	data->channel = devm_iio_channel_get(&pdev->dev, "bat-temp");
 	if (IS_ERR(data->channel)) {
+		/* nekoboot: do not swallow -EPROBE_DEFER (sc27xx-adc may be late) */
+		if (PTR_ERR(data->channel) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
 		dev_warn(&pdev->dev, "no bat-temp IIO channel, using default temperature\n");
 		data->channel = NULL;
 	}
 
 	data->charge_cha = devm_iio_channel_get(&pdev->dev, "charge-vol");
 	if (IS_ERR(data->charge_cha)) {
+		/* nekoboot: do not swallow -EPROBE_DEFER (sc27xx-adc may be late) */
+		if (PTR_ERR(data->charge_cha) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
 		dev_warn(&pdev->dev, "no charge-vol IIO channel, will use ADC readings\n");
 		data->charge_cha = NULL;
 	}
 
 	data->gpiod = devm_gpiod_get(&pdev->dev, "bat-detect", GPIOD_IN);
 	if (IS_ERR(data->gpiod)) {
+		/* nekoboot: do not swallow -EPROBE_DEFER (sc27xx-eic may be late) */
+		if (PTR_ERR(data->gpiod) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
 		dev_warn(&pdev->dev, "no bat-detect GPIO, battery present assumed\n");
 		data->gpiod = NULL;
 		data->bat_present = true;

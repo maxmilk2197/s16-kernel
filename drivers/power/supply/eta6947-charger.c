@@ -11,6 +11,7 @@
 #include <linux/i2c.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
@@ -210,6 +211,22 @@ struct eta6947_charger_info {
 
 static int eta6947_charger_set_limit_current(struct eta6947_charger_info *info, u32 limit_cur);
 
+/*
+ * nekoboot: sc27xx-fgu reports POWER_SUPPLY_PROP_PRESENT = 0 on this board.
+ * It derives that from the bat-detect EIC GPIO (gpio-115), which reads LOW --
+ * on the factory kernel as well as on ours -- so the property is simply not a
+ * usable "battery installed" signal here.  eta6947_charger_work() treats a
+ * false result as "stop charging", which disabled charging completely.
+ *
+ * The cell is soldered into the watch, so the safe interpretation is "present".
+ * The original behaviour is still available for A/B testing:
+ *     echo 0 > /sys/module/eta6947_chg/parameters/force_bat_present
+ */
+static bool force_bat_present = true;
+module_param(force_bat_present, bool, 0644);
+MODULE_PARM_DESC(force_bat_present,
+	"nekoboot: ignore sc27xx-fgu PRESENT=0 and treat the soldered battery as present (default 1)");
+
 static bool eta6947_charger_is_bat_present(struct eta6947_charger_info *info)
 {
 	struct power_supply *psy;
@@ -220,7 +237,7 @@ static bool eta6947_charger_is_bat_present(struct eta6947_charger_info *info)
 	psy = power_supply_get_by_name(ETA6947_BATTERY_NAME);
 	if (!psy) {
 		dev_err(info->dev, "Failed to get psy of sc27xx_fgu\n");
-		return present;
+		return force_bat_present;
 	}
 	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_PRESENT,
 					&val);
@@ -231,6 +248,13 @@ static bool eta6947_charger_is_bat_present(struct eta6947_charger_info *info)
 	if (ret)
 		dev_err(info->dev,
 			"Failed to get property of present:%d\n", ret);
+
+	if (!present) {
+		dev_info(info->dev,
+			 "nekoboot: sc27xx-fgu reports battery absent; force_bat_present=%d\n",
+			 force_bat_present);
+		present = force_bat_present;
+	}
 
 	return present;
 }

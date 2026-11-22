@@ -444,6 +444,8 @@ static int mtty_sdio_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, in
             if (ret)
                 tty_flip_buffer_push(mtty_dev->port);
 
+/* nekoboot: HCI graft disabled - see HARDWARE_DIAG.md 2.7 */
+#if 0
             /* 直接调用 hci_recv_frame() 将 HCI 数据传递给协议栈 */
             if (mtty_dev->hdev) {
                 struct sk_buff *skb;
@@ -464,6 +466,7 @@ static int mtty_sdio_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, in
                                       __func__);
                 }
             }
+#endif /* nekoboot: HCI graft disabled */
 
             if (ret == (block_size)) {
                 dev_unisoc_bt_dbg(ttyBT_dev,
@@ -548,6 +551,8 @@ static int mtty_pcie_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, in
             if (ret)
                 tty_flip_buffer_push(mtty_dev->port);
 
+/* nekoboot: HCI graft disabled - see HARDWARE_DIAG.md 2.7 */
+#if 0
             /* 直接调用 hci_recv_frame() 将 HCI 数据传递给协议栈 */
             if (mtty_dev->hdev) {
                 struct sk_buff *skb;
@@ -568,6 +573,7 @@ static int mtty_pcie_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, in
                                       __func__);
                 }
             }
+#endif /* nekoboot: HCI graft disabled */
 
             if (ret == (len_send)) {
 				dev_unisoc_bt_dbg(ttyBT_dev,"%s() send success", __func__);
@@ -665,6 +671,8 @@ static int mtty_pcie_tx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, in
     return 0;
 }
 
+/* nekoboot: HCI graft disabled - see HARDWARE_DIAG.md 2.7 */
+#if 0
 /* HCI callback: open device */
 static int mtty_hci_open(struct hci_dev *hdev)
 {
@@ -785,6 +793,7 @@ static int mtty_hci_setup(struct hci_dev *hdev)
     mutex_unlock(&mtty->rw_mutex);
     return 0;
 }
+#endif /* nekoboot: HCI graft disabled */
 
 static int mtty_open(struct tty_struct *tty, struct file *filp)
 {
@@ -1362,6 +1371,8 @@ static int  mtty_probe(struct platform_device *pdev)
 
     sema_init(&sem_id, BT_TX_POOL_SIZE - 1);
 
+/* nekoboot: HCI graft disabled - see HARDWARE_DIAG.md 2.7 */
+#if 0
     /* Create HCI device automatically */
     mtty->hdev = hci_alloc_dev();
     if (!mtty->hdev) {
@@ -1403,6 +1414,7 @@ static int  mtty_probe(struct platform_device *pdev)
     dev_unisoc_bt_info(ttyBT_dev,
                        "%s: HCI device %s created successfully\n",
                        __func__, mtty->hdev->name);
+#endif /* nekoboot: HCI graft disabled */
 
     return 0;
 }
@@ -1411,11 +1423,14 @@ static int  mtty_remove(struct platform_device *pdev)
 {
     struct mtty_device *mtty = platform_get_drvdata(pdev);
 
+/* nekoboot: HCI graft disabled - see HARDWARE_DIAG.md 2.7 */
+#if 0
     if (mtty && mtty->hdev) {
         hci_unregister_dev(mtty->hdev);
         hci_free_dev(mtty->hdev);
         mtty->hdev = NULL;
     }
+#endif /* nekoboot: HCI graft disabled */
 
     /* Flush and destroy workqueue BEFORE TTY driver exit to prevent race */
     if (mtty->bt_rx_workqueue) {

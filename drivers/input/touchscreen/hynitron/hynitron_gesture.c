@@ -387,12 +387,21 @@ static void hyn_check_gesture(struct input_dev *input_dev,int gesture_id)
 ***********************************************************************/
 int hyn_gesture_readdata(void)
 {
-    u8 buf[HYN_GESTRUE_POINTS * 4] = { 0 };
+    u8 buf[HYN_GESTRUE_POINTS * 4];
     int ret = -1;
     int i = 0;
     int gestrue_id = 0;
     //int read_bytes = 0;
     u8 pointnum=1;
+
+	/* nekoboot: the '{ 0 }' initialiser used to sit on the declaration above,
+	 * so GCC emitted a 1020-byte memset in the function prologue -- BEFORE the
+	 * active test -- and cst8xx_touch_report() calls this on every touch
+	 * frame.  Zero the buffer only once we know we will use it. */
+	if (!hyn_gesture_data.active)
+		return -1;
+	memset(buf, 0, sizeof(buf));
+
 	if(hyn_gesture_data.active){
     	HYN_FUNC_ENTER();
 		if (hyn_gesture_data.mode)

@@ -136,6 +136,7 @@ enum {
 	Opt_alloc,
 	Opt_fsync,
 	Opt_test_dummy_encryption,
+	Opt_inlinecrypt,
 	Opt_checkpoint,
 	Opt_err,
 };
@@ -195,6 +196,7 @@ static match_table_t f2fs_tokens = {
 	{Opt_alloc, "alloc_mode=%s"},
 	{Opt_fsync, "fsync_mode=%s"},
 	{Opt_test_dummy_encryption, "test_dummy_encryption"},
+	{Opt_inlinecrypt, "inlinecrypt"},
 	{Opt_checkpoint, "checkpoint=%s"},
 	{Opt_err, NULL},
 };
@@ -775,6 +777,17 @@ static int parse_options(struct super_block *sb, char *options)
 			f2fs_msg(sb, KERN_INFO,
 					"Test dummy encryption mount option ignored");
 #endif
+			break;
+		case Opt_inlinecrypt:
+			/*
+			 * Nekoboot: the vendor fstab passes "inlinecrypt".  This
+			 * kernel has no blk-crypto/ICE stack, but /data is NOT
+			 * encrypted, so accepting the option is all that is needed
+			 * for the mount to succeed.
+			 */
+			F2FS_OPTION(sbi).inlinecrypt = true;
+			f2fs_msg(sb, KERN_INFO,
+				 "inlinecrypt accepted (ignored: no ICE support)");
 			break;
 		case Opt_checkpoint:
 			name = match_strdup(&args[0]);
@@ -1405,6 +1418,8 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 #ifdef CONFIG_F2FS_FS_ENCRYPTION
 	if (F2FS_OPTION(sbi).test_dummy_encryption)
 		seq_puts(seq, ",test_dummy_encryption");
+	if (F2FS_OPTION(sbi).inlinecrypt)
+		seq_puts(seq, ",inlinecrypt");
 #endif
 
 	if (F2FS_OPTION(sbi).alloc_mode == ALLOC_MODE_DEFAULT)
@@ -1433,6 +1448,9 @@ static void default_options(struct f2fs_sb_info *sbi)
 	F2FS_OPTION(sbi).alloc_mode = ALLOC_MODE_DEFAULT;
 	F2FS_OPTION(sbi).fsync_mode = FSYNC_MODE_POSIX;
 	F2FS_OPTION(sbi).test_dummy_encryption = false;
+#ifdef CONFIG_FS_ENCRYPTION
+	F2FS_OPTION(sbi).inlinecrypt = false;
+#endif
 	F2FS_OPTION(sbi).s_resuid = make_kuid(&init_user_ns, F2FS_DEF_RESUID);
 	F2FS_OPTION(sbi).s_resgid = make_kgid(&init_user_ns, F2FS_DEF_RESGID);
 

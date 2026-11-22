@@ -1,0 +1,32 @@
+#
+# BD1662 / BD16XX PPG (heart-rate + SpO2) sensor
+#
+# Reverse engineered from the factory kernel of the XinTaiQi S16 / W527
+# (Unisoc UWS6152).  See REVERSE_ENGINEERING.md.
+#
+
+config SENSORS_BD1662
+	tristate "BD1662 / BD16XX PPG (heart-rate, SpO2, VP) sensor"
+	depends on I2C && INPUT
+	default n
+	help
+	  Say Y here if you have a BD1662 / BD16XX photoplethysmography
+	  sensor connected through I2C (on this board: i2c bus 2, address
+	  0x38, compatible "bd166x,bd166x_hr", DT node bd166x_hr@38).
+
+	  The driver registers an input device named "bd1662" plus a class
+	  named "bd1662" whose "device" child exposes the "hrenable" and
+	  "hrtest" attributes.  The ROM sensor HAL
+	  (/vendor/lib64/hw/sensors.ums312.so) needs both:
+	      openInput("bd1662")
+	      write /sys/class/bd1662/device/hrenable
+	  and derives the HEART_RATE, SPO2, VP and Finger Motion Detect
+	  Android sensors from the single input device.
+
+	  If the ROM also reads /sys/module/bd1662/version, build this as a
+	  module (M): that path is only created for real loadable modules in
+	  stock 4.14.  The module is called bd1662.ko and reports
+	  MODULE_VERSION("1.0"), matching the factory kernel.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called bd1662.

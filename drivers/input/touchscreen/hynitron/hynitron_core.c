@@ -354,6 +354,30 @@ static int tpd_touchinfo(struct touch_info *cinfo, struct touch_info *pinfo)
 * Output: get touch data in pinfo
 * Return: success is zero
 ***********************************************************************/
+/* nekoboot: touch point readout A/B switch -------------------------------
+ * 1 (default) = read the whole 15-byte point block in ONE hyn_i2c_read()
+ * 0           = legacy 3 x 5-byte loop
+ *
+ * hyn_i2c_read() is i2c_master_send + i2c_master_recv = TWO I2C transfers, so
+ * the legacy loop costs 6 transfers per touch frame; a single 15-byte read
+ * costs 2.  Every other read in this driver already uses one combined
+ * transfer (cst3xx_i2c_read_register, up to 28 bytes), so multi-byte reads
+ * are known-good on this panel.
+ *
+ * Flip at runtime (no reflash needed):
+ *     echo 0 > /sys/module/hynitron_ts/parameters/ts_burst_read
+ */
+/* nekoboot: ts_report_gesture */
+static int ts_report_gesture = 0;
+module_param(ts_report_gesture, int, 0644);
+MODULE_PARM_DESC(ts_report_gesture,
+                 "nekoboot: 1=call hyn_gesture_readdata() from the touch report path, 0=skip it (factory behaviour, default)");
+static int ts_burst_read = 1;
+module_param(ts_burst_read, int, 0644);
+MODULE_PARM_DESC(ts_burst_read,
+                 "nekoboot: 1=single 15-byte I2C point read (default), 0=legacy 3x5 loop");
+/* ----------------------------------------------------------------------- */
+
 static int hyn_read_touchdata(struct ts_event *data)
 {
     u8 buf[POINT_READ_BUF+2] = { 0 };
@@ -367,6 +391,18 @@ static int hyn_read_touchdata(struct ts_event *data)
 	memset((u8 *)temp_buf, 0, 8);
 	memset((u8 *)buf, 0, POINT_READ_BUF+2);
 
+	/* nekoboot: single-transfer read (see ts_burst_read above) */
+	if (ts_burst_read) {
+		u8 reg = 0;
+
+		ret = hyn_i2c_read(hyn_ts_data->client, (char *)&reg, 1,
+				   (char *)buf, 15);
+		if (ret < 0) {
+			HYN_ERROR("[B]burst Read touchdata failed, ret: %d", ret);
+			HYN_FUNC_EXIT();
+			return ret;
+		}
+	} else {
 	for(i=0;i<15;i+=5)
 	{
 		ret = hyn_i2c_read(hyn_ts_data->client, &i, 1, (u8 *)temp_buf, 5);
@@ -381,6 +417,7 @@ static int hyn_read_touchdata(struct ts_event *data)
 			memcpy((u8 *)buf+i,(u8 *)temp_buf,5);
 		}
 
+	}
 	}
 
 	/*
@@ -737,7 +774,8 @@ static void cst3xx_touch_report(struct work_struct *work)
 #endif
 
 #if HYN_GESTURE_EN
-    if(hyn_gesture_readdata()==0)
+	/* nekoboot: ts_report_gesture */
+	if (ts_report_gesture && hyn_gesture_readdata()==0)
 	goto END;	
 #endif
 
@@ -1116,7 +1154,9 @@ static void cst8xx_touch_report(struct work_struct *work)
     {		
 #if HYN_GESTURE_EN
 
-	hyn_gesture_readdata();
+	/* nekoboot: ts_report_gesture */
+	if (ts_report_gesture)
+		hyn_gesture_readdata();
 #endif
 
 #if HYN_PSENSOR_EN
@@ -1360,13 +1400,62 @@ int hyn_input_dev_int(struct hynitron_ts_data *ts_data)
 	return ret;
 }
 
+/* nekoboot: ts_irq_rising ------------------------------------------------
+ * Touch IRQ trigger edge.
+ *
+ * The FACTORY kernel registers this IRQ with IRQF_TRIGGER_FALLING:
+ *     mov w1, #2 ; str w1, [pdata, #4] ; orr w0, w0, #0x2000   -> 0x2002
+ * This tree sets HYN_IRQ_TRIGGER_RISING_CONFIG = 1, which yields
+ *     IRQF_TRIGGER_RISING | IRQF_ONESHOT                       -> 0x2001
+ * and nothing else corrects it: the DTB touch node has no `interrupts` /
+ * `interrupt-parent`, `hynitron,irq-gpio` carries flags 0, and
+ * irq_of_parse_and_map() is commented out.  Registering on the wrong edge
+ * means nearly every touch interrupt is missed -- "insensitive, drops
+ * contact".
+ *
+ *   0 (default) = FALLING, matching the factory
+ *   1           = RISING,  the previous (wrong) behaviour
+ *
+ * Writing the parameter re-programs the live IRQ immediately, so the two can
+ * be compared without reflashing:
+ *   echo 1 > /sys/module/hynitron_ts/parameters/ts_irq_rising
+ *   echo 0 > /sys/module/hynitron_ts/parameters/ts_irq_rising
+ */
+static int ts_irq_rising = 0;
+
+static int ts_irq_rising_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_int(val, kp);
+
+	if (ret)
+		return ret;
+	if (hyn_ts_data && hyn_ts_data->use_irq > 0) {
+		unsigned long f = ts_irq_rising ? IRQF_TRIGGER_RISING
+					       : IRQF_TRIGGER_FALLING;
+		ret = irq_set_irq_type(hyn_ts_data->use_irq, f | IRQF_ONESHOT);
+		pr_info("hyn_ts: IRQ %d re-armed as %s (ret=%d)\n",
+			hyn_ts_data->use_irq,
+			ts_irq_rising ? "RISING" : "FALLING", ret);
+	}
+	return ret;
+}
+
+static const struct kernel_param_ops ts_irq_rising_ops = {
+	.set = ts_irq_rising_set,
+	.get = param_get_int,
+};
+module_param_cb(ts_irq_rising, &ts_irq_rising_ops, &ts_irq_rising, 0644);
+MODULE_PARM_DESC(ts_irq_rising,
+		 "nekoboot: touch IRQ edge; 0=falling (factory, default), 1=rising");
+/* ---------------------------------------------------------------------- */
+
 int hyn_irq_init(struct i2c_client *client)
 {
 	int ret=-1;
     //spin_lock_init(&hyn_ts_data->irq_lock);
 
-	hyn_ts_data->int_trigger_type	 =HYN_IRQ_TRIGGER_RISING_CONFIG;
-    hyn_ts_data->pdata->irq_gpio_flags=((HYN_IRQ_TRIGGER_RISING_CONFIG)? IRQF_TRIGGER_RISING : IRQF_TRIGGER_FALLING);
+	hyn_ts_data->int_trigger_type	 =ts_irq_rising;
+    hyn_ts_data->pdata->irq_gpio_flags=((ts_irq_rising)? IRQF_TRIGGER_RISING : IRQF_TRIGGER_FALLING);
 	hyn_ts_data->pdata->irq_gpio_flags|=IRQF_ONESHOT;
 	
 	/* Configure gpio to irq and request irq */
@@ -1518,32 +1607,34 @@ static int hyn_parse_dt(struct device *dev, struct hynitron_ts_platform_data *pd
 
 	/* ===== 1. 分辨率 ===== */
 	/* 改为 "display-coords"，去掉 "hynitron," 前缀 */
-	ret = hyn_get_dt_coords(dev, "display-coords", pdata);
+	ret = hyn_get_dt_coords(dev, "hynitron,display-coords", pdata);
+	if (ret)
+		ret = hyn_get_dt_coords(dev, "display-coords", pdata);
 	if (ret < 0) {
 		HYN_ERROR("DTS Unable to get display-coords");
 		return -1;
 	}
 
 	/* ===== 2. 按键  ===== */
-	pdata->have_key = of_property_read_bool(np, "have-key");
+	pdata->have_key = of_property_read_bool(np, "hynitron,have-key");
 	if (pdata->have_key) {
 		hyn_ts_data->pdata->report_key_position = 0;
 
-		ret = of_property_read_u32(np, "key-number", &pdata->max_key_num);
+		ret = of_property_read_u32(np, "hynitron,key-number", &pdata->max_key_num);
 		if (ret < 0)
 			HYN_ERROR("Key number undefined!");
 		else if (pdata->max_key_num > HYN_MAX_KEYS)
 			pdata->max_key_num = HYN_MAX_KEYS;
 
-		ret = of_property_read_u32_array(np, "key-code", pdata->key_code, HYN_MAX_KEYS);
+		ret = of_property_read_u32_array(np, "hynitron,key-code", pdata->key_code, HYN_MAX_KEYS);
 		if (ret < 0)
 			HYN_ERROR("Key code undefined!");
 
-		ret = of_property_read_u32_array(np, "key-x-coord", pdata->key_x_coords, HYN_MAX_KEYS);
+		ret = of_property_read_u32_array(np, "hynitron,key-x-coord", pdata->key_x_coords, HYN_MAX_KEYS);
 		if (ret < 0)
 			HYN_ERROR("Key X Coords undefined!");
 
-		ret = of_property_read_u32_array(np, "key-y-coord", pdata->key_y_coords, HYN_MAX_KEYS);
+		ret = of_property_read_u32_array(np, "hynitron,key-y-coord", pdata->key_y_coords, HYN_MAX_KEYS);
 		if (ret < 0)
 			HYN_ERROR("Key Y Coords undefined!");
 
@@ -1557,13 +1648,17 @@ static int hyn_parse_dt(struct device *dev, struct hynitron_ts_platform_data *pd
 
 	/* ===== 3. GPIO ===== */
 	/* 改为 "reset-gpio" 和 "irq-gpio"，去掉 "hynitron," 前缀 */
-	pdata->reset_gpio = of_get_named_gpio_flags(np, "reset-gpio", 0, &pdata->reset_gpio_flags);
+	pdata->reset_gpio = of_get_named_gpio_flags(np, "hynitron,reset-gpio", 0, &pdata->reset_gpio_flags);
+	if (pdata->reset_gpio < 0)
+		pdata->reset_gpio = of_get_named_gpio_flags(np, "reset-gpio", 0, &pdata->reset_gpio_flags);
 	if (pdata->reset_gpio < 0) {
 		HYN_ERROR("DTS Unable to get reset-gpio");
 		return -1;
 	}
 
-	pdata->irq_gpio = of_get_named_gpio_flags(np, "irq-gpio", 0, &pdata->irq_gpio_flags);
+	pdata->irq_gpio = of_get_named_gpio_flags(np, "hynitron,irq-gpio", 0, &pdata->irq_gpio_flags);
+	if (pdata->irq_gpio < 0)
+		pdata->irq_gpio = of_get_named_gpio_flags(np, "irq-gpio", 0, &pdata->irq_gpio_flags);
 	if (pdata->irq_gpio < 0) {
 		HYN_ERROR("DTS Unable to get irq-gpio");
 		return -1;
@@ -1571,7 +1666,9 @@ static int hyn_parse_dt(struct device *dev, struct hynitron_ts_platform_data *pd
 
 	/* ===== 4. 最大触摸点数 ===== */
 	/* 改为 "max-touch-number"，去掉 "hynitron," 前缀 */
-	ret = of_property_read_u32(np, "max-touch-number", &temp_val);
+	ret = of_property_read_u32(np, "hynitron,max-touch-number", &temp_val);
+	if (ret < 0)
+		ret = of_property_read_u32(np, "max-touch-number", &temp_val);
 	if (ret < 0) {
 		HYN_ERROR("DTS Unable to get max-touch-number, please check dts");
 		pdata->max_touch_num = HYN_MAX_POINTS;

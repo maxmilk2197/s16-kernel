@@ -545,3 +545,29 @@ source "drivers/misc/sprdwcn/Kconfig"
 source "drivers/misc/sprd_audio/Kconfig"
 source "drivers/misc/sprd_apdu/Kconfig"
 endmenu
+
+config NEKOBOOT_BOOTGUARD
+	tristate "nekoboot boot guard (userspace watchdog -> recovery)"
+	default y
+	help
+	  Arm a timer at late_initcall.  If userspace has not written to
+	  /proc/nekoboot_alive before it fires, write an Android
+	  boot-recovery BCB into the misc partition and reboot, so the
+	  bootloader starts recovery instead of hanging forever.
+
+	  Say Y unless you know what you are doing.
+
+config NEKOBOOT_KEYRESCUE
+	tristate "nekoboot key rescue (boot-window key combos)"
+	depends on INPUT
+	default y
+	help
+	  Arm at module_init (device_initcall level when built-in).  While
+	  armed (until userspace writes
+	  /proc/nekoboot_keyrescue_alive or window_ms passes):
+	  side key x3 -> disable LSPosed modules and reboot; side key
+	  x5 -> disable ALL modules and reboot; power key x5 -> write
+	  a boot-recovery BCB and reboot.  Observe-only on the input
+	  path, no event is ever consumed.
+
+	  Say Y unless you know what you are doing.

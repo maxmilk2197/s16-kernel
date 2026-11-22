@@ -195,6 +195,7 @@ struct eta6947_charger_info {
 	struct mutex lock;
 	bool charging;
 	u32 limit;
+	u32 term_vol_uv;	/* nekoboot: cached termination voltage, uV */
 	struct delayed_work otg_work;
 	struct delayed_work wdt_work;
 	struct regmap *pmic;
@@ -348,6 +349,7 @@ static int eta6947_charger_hw_init(struct eta6947_charger_info *info)
 	if (ret) {
 		dev_warn(info->dev, "no battery information is supplied, ret = %d\n", ret);
 		voltage_max_microvolt = 4200;
+		info->term_vol_uv = voltage_max_microvolt * 1000;
 
 		/*
 		 * If no battery information is supplied, we should set
@@ -374,6 +376,7 @@ static int eta6947_charger_hw_init(struct eta6947_charger_info *info)
 
 		voltage_max_microvolt =
 			bat_info.constant_charge_voltage_max_uv / 1000;
+		info->term_vol_uv = voltage_max_microvolt * 1000;
 		power_supply_put_battery_info(info->psy_usb, &bat_info);
 
 		if (of_device_is_compatible(info->dev->of_node,
@@ -848,6 +851,15 @@ static int eta6947_charger_usb_get_property(struct power_supply *psy,
         val->intval = POWER_SUPPLY_HEALTH_GOOD;
         break;
     
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
+		val->intval =
+			eta6947_max_chg_cur[ARRAY_SIZE(eta6947_max_chg_cur) - 1];
+		break;
+
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
+		val->intval = info->term_vol_uv;
+		break;
+
 	case POWER_SUPPLY_PROP_USB_TYPE:
 		type = info->usb_phy->chg_type;
 
@@ -963,6 +975,8 @@ static enum power_supply_property eta6947_usb_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_USB_TYPE,
+	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX,
 };
 
 static const struct power_supply_desc eta6947_charger_desc = {

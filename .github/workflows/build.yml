@@ -1,0 +1,93 @@
+name: Build MMNeko Image
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Restore toolchain cache
+        id: tc
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: gcc49-lineage181-${{ runner.os }}
+
+      - name: Fetch GCC 4.9 toolchain (LineageOS 18.1)
+        if: steps.tc.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 --branch lineage-18.1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+            ~/toolchain
+          ls ~/toolchain
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev ccache
+
+      - name: Guard .config (vendor keys must survive)
+        run: |
+          set -e
+          grep -q '^CONFIG_ARCH_SPRD=y' .config        || { echo 'FAIL: ARCH_SPRD lost';  exit 1; }
+          grep -q '^CONFIG_COMPAT=y' .config           || { echo 'FAIL: COMPAT lost';     exit 1; }
+          grep -q '^CONFIG_SENSORS_BD1662=y' .config   || { echo 'FAIL: BD1662 lost';     exit 1; }
+          grep -q '^CONFIG_KSU_SUSFS=y' .config        || { echo 'FAIL: KSU_SUSFS lost'; exit 1; }
+          ! grep -q '^CONFIG_KSU_DEBUG=y' .config       || { echo 'FAIL: KSU_DEBUG on';   exit 1; }
+          ! grep -q '^CONFIG_KSU_SUSFS_ENABLE_LOG=y' .config || { echo 'FAIL: SUSFS log on'; exit 1; }
+          echo "config guard passed"
+
+      - name: Build Image
+        run: |
+          set -o pipefail
+          export ARCH=arm64
+          # bin/ for the lineage branch layout, binok/ for the vendor copy
+          if [ -d "$HOME/toolchain/bin" ]; then
+            TC="$HOME/toolchain/bin"
+          else
+            TC="$HOME/toolchain/binok"
+          fi
+          export CROSS_COMPILE="$TC/aarch64-linux-android-"
+          export CCACHE_COMPILERCHECK=content
+          export CC="ccache ${CROSS_COMPILE}gcc"
+          export KBUILD_BUILD_USER=MMNeko
+          export KBUILD_BUILD_HOST=MMNeko
+          "${CROSS_COMPILE}gcc" --version | head -1
+          make -j"$(nproc)" Image > build.log 2>&1
+          RC=$?
+          tail -60 build.log || true
+          echo "make exit code: $RC" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $RC
+
+      - name: Hash and size
+        if: always()
+        run: |
+          if [ -f arch/arm64/boot/Image ]; then
+            ls -l arch/arm64/boot/Image | tee -a "$GITHUB_STEP_SUMMARY"
+            sha256sum arch/arm64/boot/Image | tee -a "$GITHUB_STEP_SUMMARY"
+            strings -n 5 arch/arm64/boot/Image | grep '^Linux version' | head -1 | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Image missing"
+          fi
+
+      - name: Upload Image artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmneko-Image
+          path: arch/arm64/boot/Image
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmneko-build-log
+          path: build.log

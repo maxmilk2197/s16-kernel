@@ -531,6 +531,12 @@ static int of_parse_oled_cmds(struct sprd_oled *oled,
 	len = (cmds->wc_h << 8) | cmds->wc_l;
 	total =  size / (len + 4);
 
+	/* struct sprd_oled has cmds[255]; refuse to overflow it */
+	if (total > 255) {
+		DRM_ERROR("too many oled brightness cmds (%d > 255)\n", total);
+		return -EINVAL;
+	}
+
 	p = (struct dsi_cmd_desc *)kzalloc(size, GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
@@ -563,6 +569,21 @@ static int sprd_oled_set_brightness(struct backlight_device *bdev)
 	brightness = bdev->props.brightness;
 	level = brightness * oled->max_level / 255;
 
+	/*
+	 * Per-branch clamp. Single-cmd panels take the LEVEL VALUE in
+	 * payload[1] (range 0..max_level); multi-cmd panels take an INDEX
+	 * into oled->cmds[] (range 0..cmds_total-1). The old code used the
+	 * value unvalidated, so a degenerate table let cmds[level] read a
+	 * garbage pointer and fault in sprd_panel_send_cmds (HwBinder via
+	 * brightness_store, captured in pstore dmesg-ramoops-0 -- one of
+	 * the spontaneous-reboot causes). Healthy panels never hit any
+	 * clamp, so normal behaviour is byte-identical to factory.
+	 */
+	if (level < 0)
+		level = 0;
+	if (level > oled->max_level)
+		level = oled->max_level;
+
 	DRM_INFO("%s level: %d\n", __func__, level);
 
 	sprd_panel_send_cmds(panel->slave,
@@ -574,10 +595,17 @@ static int sprd_oled_set_brightness(struct backlight_device *bdev)
 		sprd_panel_send_cmds(panel->slave,
 			     oled->cmds[0],
 			     oled->cmd_len);
-	} else
+	} else {
+		int idx = level;
+
+		if (idx >= oled->cmds_total)
+			idx = oled->cmds_total - 1;
+		if (idx < 0)
+			idx = 0;
 		sprd_panel_send_cmds(panel->slave,
-			     oled->cmds[level],
+			     oled->cmds[idx],
 			     oled->cmd_len);
+	}
 
 	sprd_panel_send_cmds(panel->slave,
 			     panel->info.cmds[CMD_OLED_REG_UNLOCK],

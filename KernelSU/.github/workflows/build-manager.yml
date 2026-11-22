@@ -8,6 +8,8 @@ on:
       - '.github/workflows/build-lkm.yml'
       - '.github/workflows/ddk-lkm.yml'
       - '.github/workflows/ksud.yml'
+      - '.github/workflows/ksuinit.yml'
+      - '.github/riscv64-cargo.toml'
       - 'manager/**'
       - 'kernel/**'
       - 'userspace/**'
@@ -24,7 +26,6 @@ jobs:
       keystore: ${{ steps.gen.outputs.keystore }}
       keystore_password: ${{ steps.gen.outputs.keystore_password }}
       key_password: ${{ steps.gen.outputs.key_password }}
-      spoofed_package_name: ${{ steps.pkg.outputs.spoofed_package_name }}
     steps:
       - name: Generate temporary keystore
         if: github.event_name == 'pull_request'
@@ -72,15 +73,6 @@ jobs:
           echo "Certificate size: $SIZE_HEX ($SIZE_DEC bytes)"
           echo "Certificate hash: $HASH"
 
-      - name: Generate package name for spoofed manager
-        id: pkg
-        run: |
-          word1=$(tr -dc 'a-z' </dev/urandom | head -c6)
-          word2=$(tr -dc 'a-z' </dev/urandom | head -c6)
-          word3=$(tr -dc 'a-z' </dev/urandom | head -c6)
-          SPOOFED_PACKAGE_NAME="${word1}.${word2}.${word3}"
-          echo "spoofed_package_name=$SPOOFED_PACKAGE_NAME" >> $GITHUB_OUTPUT
-
   build-lkm:
     needs: prepare
     uses: ./.github/workflows/build-lkm.yml
@@ -100,6 +92,7 @@ jobs:
           - aarch64-linux-android
           - x86_64-linux-android
           - armv7-linux-androideabi
+          - riscv64-linux-android
         os: [ubuntu-latest]
     uses: ./.github/workflows/ksud.yml
     with:
@@ -113,14 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - manager_type: "spoofed"
-            build_type: "release"
-
-          - manager_type: "normal"
-            build_type: "release"
-          - manager_type: "normal"
-            build_type: "debug"
+        build_type: [ "release", "debug" ]
     defaults:
       run:
         working-directory: ./manager
@@ -138,15 +124,6 @@ jobs:
             echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           else
             echo "COMMIT_SHA=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Determine manager variant
-        id: determine
-        run: |
-          if [ "${{ matrix.manager_type }}" == "spoofed" ]; then
-            echo "title=Spoofed-Manager" >> $GITHUB_OUTPUT
-          else
-            echo "title=Manager" >> $GITHUB_OUTPUT
           fi
 
       - name: Write key
@@ -189,15 +166,12 @@ jobs:
       - name: Build APK
         run: |
           export BUILD_EXTRA_ARGS=""
-          if [ "${{ matrix.manager_type }}" == "spoofed" ]; then
-            export KSU_PACKAGE_NAME="${{ needs.prepare.outputs.spoofed_package_name }}"
-            export BUILD_EXTRA_ARGS="-PKSU_PACKAGE_NAME=$KSU_PACKAGE_NAME -PIS_SPOOFED_BUILD=true"
-          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
             export KSU_PACKAGE_NAME="com.resukisu.resukisu.pr${{github.event.pull_request.number}}"
             export BUILD_EXTRA_ARGS="-PKSU_PACKAGE_NAME=$KSU_PACKAGE_NAME"
           elif [ "${{ github.ref_type }}" != "tag" ] && [ "${{ github.ref_name }}" != "main" ]; then
             export KSU_PACKAGE_NAME="com.resukisu.resukisu.dev"
-            export KSU_NAME="ReSukiSU-DEV"
+            export KSU_NAME="BakaSU-DEV"
             export BUILD_EXTRA_ARGS="-PKSU_PACKAGE_NAME=$KSU_PACKAGE_NAME -PKSU_NAME=$KSU_NAME"
           fi
 
@@ -210,7 +184,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+          name: Manager-gradle-${{ matrix.build_type }}
           path: |
             manager/app/build/outputs/apk/release/*.apk
             manager/app/build/outputs/apk/debug/*.apk
@@ -218,7 +192,7 @@ jobs:
       - name: Upload mappings
         uses: actions/upload-artifact@v7
         with:
-          name: "${{ steps.determine.outputs.title }}-mappings"
+          name: "Manager-mappings"
           path: "manager/app/build/outputs/mapping/release/"
           if-no-files-found: ignore
 
@@ -229,33 +203,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - manager_type: "spoofed"
-            build_type: "release"
-          - manager_type: "normal"
-            build_type: "release"
-          - manager_type: "normal"
-            build_type: "debug"
+        build_type: [ "release", "debug" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Determine manager variant
-        id: determine
-        run: |
-          if [ "${{ matrix.manager_type }}" == "spoofed" ]; then
-            echo "title=Spoofed-Manager" >> $GITHUB_OUTPUT
-          else
-            echo "title=Manager" >> $GITHUB_OUTPUT
-          fi
-
       - name: Download artifact
         uses: actions/download-artifact@v8
         with:
-            name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
-            path: artifacts/${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+            name: Manager-gradle-${{ matrix.build_type }}
+            path: artifacts/Manager-gradle-${{ matrix.build_type }}
       
       - name: Download arm64 ksud
         uses: actions/download-artifact@v8
@@ -275,10 +234,17 @@ jobs:
           name: ksud-armv7-linux-androideabi
           path: artifacts/ksud-armv7-linux-androideabi
 
+      - name: Download RISC-V ksud
+        uses: actions/download-artifact@v8
+        with:
+          name: ksud-riscv64-linux-android
+          path: artifacts/ksud-riscv64-linux-android
+
+
       - name: Place manager apk and ksud artifacts
         run: |
           mkdir -p manager/app/build/outputs/apk/${{ matrix.build_type }}
-          APKS=$(find artifacts/${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }} -type f -name "*.apk")
+          APKS=$(find artifacts/Manager-gradle-${{ matrix.build_type }} -type f -name "*.apk")
           APKS=$(echo "$APKS" | tr '\n' ' ')
           test -n "$APKS"
           cp -f $APKS manager/app/build/outputs/apk/${{ matrix.build_type }}/
@@ -286,15 +252,19 @@ jobs:
           mkdir -p target/aarch64-linux-android/release
           mkdir -p target/armv7-linux-androideabi/release
           mkdir -p target/x86_64-linux-android/release
+          mkdir -p target/riscv64-linux-android/release
           ARM64_KSUD=$(find artifacts/ksud-aarch64-linux-android -type f -name ksud | head -n 1)
           ARMV7_KSUD=$(find artifacts/ksud-armv7-linux-androideabi -type f -name ksud | head -n 1)
           X86_64_KSUD=$(find artifacts/ksud-x86_64-linux-android -type f -name ksud | head -n 1)
+          RISCV64_KSUD=$(find artifacts/ksud-riscv64-linux-android -type f -name ksud | head -n 1)
           test -n "$ARM64_KSUD"
           test -n "$ARMV7_KSUD"
           test -n "$X86_64_KSUD"
+          test -n "$RISCV64_KSUD"
           cp -f "$ARM64_KSUD" target/aarch64-linux-android/release/ksud
           cp -f "$ARMV7_KSUD" target/armv7-linux-androideabi/release/ksud
           cp -f "$X86_64_KSUD" target/x86_64-linux-android/release/ksud
+          cp -f "$RISCV64_KSUD" target/riscv64-linux-android/release/ksud
 
       - name: Prepare signing inputs
         env:
@@ -329,6 +299,7 @@ jobs:
             -a arm64-v8a \
             -a armeabi-v7a \
             -a x86_64 \
+            -a riscv64 \
             -K "$SIGN_KEYSTORE_FILE" \
             -A "$SIGN_KEY_ALIAS" \
             -P "$SIGN_KEYSTORE_PASSWORD" \
@@ -338,21 +309,56 @@ jobs:
       - name: Delete gradle build
         uses: GeekyEggo/delete-artifact@v6
         with:
-          name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+          name: Manager-gradle-${{ matrix.build_type }}
         
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.determine.outputs.title }}-${{ matrix.build_type }}
+          name: Manager-${{ matrix.build_type }}
           path: dist/*.apk
 
-  upload-telegram:
-    needs: repack-manager
+  telegram-bot-api:
+    name: Telegram Bot API
     if: github.event_name != 'pull_request' && github.event_name != 'workflow_call'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        manager_type: [ "spoofed", "normal" ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Clone Telegram Bot API
+        run: |
+          git clone --recursive https://github.com/tdlib/telegram-bot-api.git
+          git status telegram-bot-api >> telegram-bot-api-status
+      - name: Cache Bot API Binary
+        id: cache-bot-api
+        uses: actions/cache@v6.1.0
+        with:
+          path: telegram-bot-api-binary
+          key: CI-telegram-bot-api-${{ hashFiles('telegram-bot-api-status') }}
+      - name: Compile Telegram Bot API
+        if: steps.cache-bot-api.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install make git zlib1g-dev libssl-dev gperf cmake g++
+          cd telegram-bot-api
+          rm -rf build
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=.. ..
+          cmake --build . --target install -j$(nproc)
+          cd ../..
+          ls -l telegram-bot-api/bin/telegram-bot-api*
+          cp telegram-bot-api/bin/telegram-bot-api telegram-bot-api-binary
+      - name: Upload Binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: telegram-bot-api-binary
+          path: telegram-bot-api-binary
+
+  upload-telegram:
+    needs: [repack-manager, telegram-bot-api]
+    if: github.event_name != 'pull_request' && github.event_name != 'workflow_call'
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -367,16 +373,10 @@ jobs:
             echo "UPLOAD=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Determine manager variant
+      - name: Determine topicid
         id: determine
         run: |
-          if [ "${{ matrix.manager_type }}" == "spoofed" ]; then
-            echo "title=Spoofed-Manager" >> $GITHUB_OUTPUT
-            echo "topicid=${{ vars.MESSAGE_SPOOFED_THREAD_ID }}" >> $GITHUB_OUTPUT
-          else
-            echo "title=Manager" >> $GITHUB_OUTPUT
-            echo "topicid=${{ vars.MESSAGE_THREAD_ID }}" >> $GITHUB_OUTPUT
-          fi
+          echo "topicid=${{ vars.MESSAGE_THREAD_ID }}" >> $GITHUB_OUTPUT
 
           if [[ "${{ github.ref }}" != "refs/heads/main" && "${{ github.ref_type }}" != "tag" ]]; then
             echo "topicid=${{ vars.MESSAGE_DEVELOPING_MANAGER_THREAD_ID }}" >> $GITHUB_OUTPUT
@@ -385,8 +385,14 @@ jobs:
       - name: Download Release artifact
         uses: actions/download-artifact@v8
         with:
-          name: ${{ steps.determine.outputs.title }}-release
+          name: Manager-release
           path: ./apk/release
+
+      - name: Download Telegram Bot API Binary
+        uses: actions/download-artifact@v8
+        with:
+          name: telegram-bot-api-binary
+          path: .
 
       - name: Upload to Telegram
         if: steps.need_upload.outputs.UPLOAD == 'true'
@@ -396,10 +402,11 @@ jobs:
           MESSAGE_THREAD_ID: ${{ steps.determine.outputs.topicid }}
           DEVELOPING_THREAD_ID: ${{ vars.MESSAGE_DEVELOPING_MANAGER_THREAD_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TITLE: ${{ steps.determine.outputs.title }}
+          TITLE: Manager
           BRANCH: ${{ github.ref_name }}
         run: |
           pip3 install python-telegram-bot
           export VERSION=$(git rev-list --count HEAD)
           APK_RELEASE=apk/release/*.apk
+          chmod +x telegram-bot-api-binary
           python3 $GITHUB_WORKSPACE/scripts/ksubot.py $APK_RELEASE

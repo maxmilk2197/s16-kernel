@@ -20,6 +20,10 @@
 #ifdef CONFIG_KSU_SUSFS
 #include <linux/susfs_def.h>
 #include <linux/version.h>
+/* BakaSU vfs_fstat hook: inflates the reported size of init.rc so that
+ * init keeps parsing the rc content KSU appended at runtime.
+ * Implemented in KernelSU kernel/runtime/ksud_integration.c */
+extern void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr);
 #endif
 
 #include <linux/uaccess.h>
@@ -163,6 +167,10 @@ int vfs_statx_fd(unsigned int fd, struct kstat *stat,
 	if (f.file) {
 		error = vfs_getattr(&f.file->f_path, stat,
 				    request_mask, query_flags);
+#ifdef CONFIG_KSU_SUSFS
+		if (!error)
+			ksu_handle_vfs_fstat(fd, &stat->size);
+#endif
 		fdput(f);
 	}
 	return error;
